@@ -35,8 +35,8 @@ DSH 侧只有官方 DeepSeek 适配器会发原生会话头（`x-deepseek-harnes
 1. **只对 opencode 域生效**（`opencode.ai` 及其子域），其它请求原样透传；
 2. **请求已带 `x-opencode-session` 就不覆盖** —— 你在设置里手配的静态值优先；上游哪天自己发了，
    本插件自动变成 no-op；
-3. 会话 ID = `dsh-` + `sha1(model + 该对话首条用户消息)` 前 32 位 ——
-   **同一段对话稳定、不同对话互不相同**；
+3. 会话 ID = **人可读短标签**：`dsh-青竹aB`（中文词 + 两个随机字母），
+   **同一段对话稳定、不同对话互不相同**，且能直接在 opencode 控制台的「会话」列里认出是哪一段；
 4. 无正文的请求（如拉模型列表）用本进程固定 ID；
 5. 只**克隆**读请求体（绝不消费原请求体）；任何一步失败都回退「原样发送」。
 
@@ -77,8 +77,36 @@ dsh plugin --profile <name> add dsh-llm-opencode-session
 装完**什么都不用配**：正常选 opencode 路由下的模型聊天即可。想确认是否生效，看启动日志里有没有：
 
 ```text
-[dsh-opencode] opencode 会话头注入已安装（仅 opencode.ai 域；已带该头的请求不覆盖）
+[dsh-opencode] opencode 会话头注入已安装（仅 opencode.ai 域；标签风格 cjk；已带该头的请求不覆盖）
 ```
+
+每为新对话生成一个标签，都会打一行 info，便于把控制台的「会话」列对回本地：
+
+```text
+[dsh-opencode] 新会话 dsh-云雀rz（opencode 控制台「会话」列对应此值）
+```
+
+## 会话标签长什么样
+
+| 风格 | 样例 | 构成 | 何时用 |
+| --- | --- | --- | --- |
+| `cjk`（默认） | `dsh-青竹aB` | 两个汉字（50 词表）+ 两个字母 | 想一眼看出「这是哪段对话」 |
+| `ascii` | `dsh-Kx7Q` | 四个字母（去掉了 l/I/O/0） | 控制台把中文显示成乱码时 |
+
+字母表刻意去掉 `l`/`I`/`O`/`0`，避免和 `1`/`o` 看混。同一标签在一次进程内不会重复。
+
+想改成纯 ASCII：
+
+```yaml
+# $DSH_HOME/profiles/dsh-forge/cordis.patch.yml 里那条 insert 行
+- id: llm-opencode-session
+  config:
+    labelStyle: ascii
+```
+
+> **请求头编码注意**：HTTP 头按规范只能是 ByteString。中文标签会先按 UTF-8 编码、
+> 再把每个字节映射回 latin-1 字符送出，**线上字节与 UTF-8 完全一致**；
+> 若某个网关按 latin-1 解码而看到乱码，切 `labelStyle: ascii` 即可。
 
 ## 边界与已知取舍
 
@@ -87,6 +115,9 @@ dsh plugin --profile <name> add dsh-llm-opencode-session
 - **两段对话首条消息完全相同**（例如都只发「你好」）会共用一个 ID。
 - 若你在设置里**手配过** `x-opencode-session`（静态值），它会优先，于是该路由所有对话共用一个
   会话；想让本插件逐会话工作，把那条静态头删掉。
+- **中文标签是给「人看」的，不是协议要求**：opencode 只把该值当作不透明字符串做路由/缓存键，
+  取值本身无格式约束；因此换标签风格不会影响命中率，但**换标签会换一次 ID**，
+  该对话的提示缓存要重新预热。
 - 本插件**不改任何上游代码**，也不依赖任何上游包（零 `peerDependencies`）。
 
 ## 开发

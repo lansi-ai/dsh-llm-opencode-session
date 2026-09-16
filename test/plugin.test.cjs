@@ -16,7 +16,7 @@ const { pathToFileURL } = require('node:url')
 
 const ENTRY = path.join(__dirname, '..', 'lib', 'index.js')
 const plugin = require(ENTRY)
-const { isOpencodeRequestUrl, conversationSeed, conversationSessionId, withOpencodeSessionHeader, installOpencodeSessionHeader, apply } = plugin
+const { isOpencodeRequestUrl, conversationSeed, conversationSessionId, sessionLabel, toHeaderValue, withOpencodeSessionHeader, installOpencodeSessionHeader, apply } = plugin
 
 /** 记录调用并回 200 的假 fetch。 */
 function recorder(response = { ok: true }) {
@@ -61,13 +61,40 @@ test('conversationSeed：三种 wire 形状都取首条用户消息，取不到�
   assert.equal(conversationSeed(null), undefined)
 })
 
-test('conversationSessionId：同对话稳定（历史增长不换）、不同对话不同、前缀 dsh-', () => {
+test('conversationSessionId：标签为「dsh-中文2字+字母2」，同对话稳定、不同对话不同', () => {
   const first = conversationSessionId(JSON.parse(chatBody('第一个问题')))
-  assert.match(first, /^dsh-[0-9a-f]{32}$/)
+  assert.match(first, /^dsh-[\u4e00-\u9fff]{2}[A-Za-z]{2}$/)
+  assert.equal(first.length, 8, '控制在 8 字符内，短 id 截断显示时完整可见')
   const second = conversationSessionId(JSON.parse(chatBody('第一个问题', [{ role: 'assistant', content: '答' }, { role: 'user', content: '追问' }])))
   assert.equal(second, first)
   assert.notEqual(conversationSessionId(JSON.parse(chatBody('另一个问题'))), first)
   assert.equal(conversationSessionId({ model: 'x', messages: [] }), undefined)
+  // ascii 风格：纯字母数字，同样稳定
+  const ascii = conversationSessionId(JSON.parse(chatBody('第一个问题')), 'ascii')
+  assert.match(ascii, /^dsh-[A-Za-z]{4}$/)
+  assert.equal(conversationSessionId(JSON.parse(chatBody('第一个问题')), 'ascii'), ascii)
+})
+
+test('sessionLabel：确定性、人可读、风格可切', () => {
+  assert.equal(sessionLabel('same-seed'), sessionLabel('same-seed'))
+  assert.notEqual(sessionLabel('seed-a'), sessionLabel('seed-b'))
+  assert.match(sessionLabel('seed-a'), /^dsh-[\u4e00-\u9fff]{2}[A-Za-z]{2}$/)
+  assert.match(sessionLabel('seed-a', 'ascii'), /^dsh-[A-Za-z]{4}$/)
+  // 字母表去掉了易混字符，便于口头/肉眼辨认
+  assert.equal(/[lIO0]/.test(sessionLabel('seed-a', 'ascii').slice(4)), false)
+})
+
+/** 读回记录到的头值：wire 上是 UTF-8 字节按 latin-1 逐字节承载的串，解回可读标签。 */
+function decodeHeader(value) {
+  return Buffer.from(String(value), 'latin1').toString('utf8')
+}
+
+test('toHeaderValue：非 ASCII 标签编成 ByteString（wire 仍是 UTF-8 字节），ASCII 原样', () => {
+  const label = 'dsh-青竹aB'
+  const wire = toHeaderValue(label)
+  assert.equal(wire.split('').every((ch) => ch.charCodeAt(0) <= 255), true, '不得含 >255 的码元')
+  assert.equal(Buffer.from(wire, 'latin1').toString('utf8'), label, 'latin1 解回应还原标签')
+  assert.equal(toHeaderValue('dsh-Kx7Q'), 'dsh-Kx7Q', '纯 ASCII 原样返回')
 })
 
 test('注入：非 opencode 域原样透传，opencode 域按对话注入且不消费请求体', async () => {
@@ -79,7 +106,7 @@ test('注入：非 opencode 域原样透传，opencode 域按对话注入且不�
 
   await fetchImpl(OPENCODE_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: chatBody('第一个问题') })
   const injected = calls[1]
-  assert.match(injected.header, /^dsh-[0-9a-f]{32}$/)
+  assert.match(decodeHeader(injected.header), /^dsh-[\u4e00-\u9fff]{2}[A-Za-z]{2}$/)
   assert.equal(injected.body, chatBody('第一个问题'), '下游仍应读到完整请求体')
 
   await fetchImpl(OPENCODE_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: chatBody('第一个问题', [{ role: 'assistant', content: '答' }, { role: 'user', content: '追问' }]) })
@@ -97,7 +124,7 @@ test('注入：Request 形态同样生效（克隆读体，不消费原请求）
     body: chatBody('Request 形态'),
   })
   await fetchImpl(request)
-  assert.match(calls[0].header, /^dsh-[0-9a-f]{32}$/)
+  assert.match(decodeHeader(calls[0].header), /^dsh-[\u4e00-\u9fff]{2}[A-Za-z]{2}$/)
   assert.equal(calls[0].body, chatBody('Request 形态'))
 })
 
@@ -132,7 +159,7 @@ test('install：装到 globalThis.fetch 上、幂等、可还原', async () => {
     assert.notEqual(globalThis.fetch, inner, '应已替换 globalThis.fetch')
     assert.equal(installOpencodeSessionHeader(), restore, '重复安装应返回同一还原器')
     await globalThis.fetch(OPENCODE_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: chatBody('装到全局') })
-    assert.match(calls[0].header, /^dsh-[0-9a-f]{32}$/)
+    assert.match(decodeHeader(calls[0].header), /^dsh-[\u4e00-\u9fff]{2}[A-Za-z]{2}$/)
     restore()
     assert.equal(globalThis.fetch, inner, '还原后应回到原实现')
   } finally {
@@ -157,7 +184,7 @@ test('apply：经 ctx.effect 安装补丁，卸载即还原；effect 抛错不�
     apply({ effect: (callback) => { cleanup = callback() }, logger: { info: () => {}, warn: () => {} } })
     assert.notEqual(globalThis.fetch, inner, 'apply 应已安装补丁')
     await globalThis.fetch(OPENCODE_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: chatBody('插件装载') })
-    assert.match(calls[0].header, /^dsh-[0-9a-f]{32}$/)
+    assert.match(decodeHeader(calls[0].header), /^dsh-[\u4e00-\u9fff]{2}[A-Za-z]{2}$/)
     cleanup()
     assert.equal(globalThis.fetch, inner, '卸载后应还原')
   } finally {

@@ -1,6 +1,6 @@
 {
   "name": "dsh-llm-opencode-session",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DSH Forge LLM host plugin: sends a stable per-conversation `x-opencode-session` header on opencode.ai gateway requests (OpenCode Zen / Go), which the upstream pi-ai adapter does not send yet.",
   "license": "MIT",
   "type": "module",
