@@ -1,0 +1,5 @@
+# 依赖（本包零运行时依赖；devDependencies 仅供构建/测试）
+node_modules/
+# 构建缓存
+*.tsbuildinfo
+# 注：lib/ 是**入库产物**（--install-plugin 不跑构建，装完即用）

@@ -1,0 +1,16 @@
+# dsh-llm-opencode-session bundle patch — inserts the host plugin row.
+#
+# The plugin wraps the process-wide `fetch` and adds a stable per-conversation
+# `x-opencode-session` header on requests to `opencode.ai` (OpenCode Zen / Go).
+# It never overwrites a header the request already carries, so a static value from
+# settings stays in charge and the plugin becomes a no-op once upstream sends it.
+#
+# Install (official dsh CLI):
+#   dsh plugin --profile <name> add dsh-llm-opencode-session
+#
+# Install (DSH Forge):
+#   "DSH Forge.exe" --install-plugin github:lansi-ai/dsh-llm-opencode-session
+#   (forge writes this same row into $DSH_HOME/profiles/dsh-forge/cordis.patch.yml)
+- insert:
+    - id: llm-opencode-session
+      name: dsh-llm-opencode-session
